@@ -1,0 +1,414 @@
+{
+  "info": {
+    "name": "Doctor Tracker API",
+    "description": "Local Doctor Tracker API.\n\n1. Start the API (`npm run dev`) so it is on http://localhost:4000.\n2. In Postman, enable the cookie jar (Settings → General → Cookies).\n3. Run Auth → Login first. Postman stores the httpOnly accessToken and refreshToken cookies for localhost.\n4. Run Doctors → Create doctor, then Doctor patients → Add patient. Those requests save doctorId and patientId for the other calls.\n\nDev login: admin@doctortracker.local / ChangeMe123!\n\nSuccess: { success, data, meta? }.\nError: { success: false, error: { code, message, details? } }.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:4000"
+    },
+    {
+      "key": "doctorId",
+      "value": ""
+    },
+    {
+      "key": "otherDoctorId",
+      "value": ""
+    },
+    {
+      "key": "patientId",
+      "value": ""
+    }
+  ],
+  "item": [
+    {
+      "name": "Health",
+      "item": [
+        {
+          "name": "Health check",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/v1/health",
+            "description": "Public. No cookie required."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Auth",
+      "item": [
+        {
+          "name": "Login",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 200', function () {",
+                  "  pm.response.to.have.status(200);",
+                  "});",
+                  "pm.test('session user returned', function () {",
+                  "  const body = pm.response.json();",
+                  "  pm.expect(body.success).to.eql(true);",
+                  "  pm.expect(body.data.role).to.eql('admin');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"admin@doctortracker.local\",\n  \"password\": \"ChangeMe123!\"\n}"
+            },
+            "url": "{{baseUrl}}/api/v1/auth/login",
+            "description": "Public. Sets accessToken (15m) and refreshToken (7d) httpOnly cookies. Five failures per 15 minutes for the same IP and email return 429."
+          }
+        },
+        {
+          "name": "Refresh",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": "{{baseUrl}}/api/v1/auth/refresh",
+            "description": "Public. Uses the refresh cookie and sets a new access cookie."
+          }
+        },
+        {
+          "name": "Me",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/v1/auth/me",
+            "description": "Requires the admin access cookie."
+          }
+        },
+        {
+          "name": "Logout",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": "{{baseUrl}}/api/v1/auth/logout",
+            "description": "Revokes the refresh token and clears both cookies."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Doctors",
+      "item": [
+        {
+          "name": "List doctors",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/v1/doctors?page=1&limit=10&sort=createdAt&order=desc",
+            "description": "Optional query: q (whole-word search on name, specialization, hospital), specialization, hospital, from, to (createdAt, YYYY-MM-DD), sort (name | createdAt | patientCount), order (asc | desc), page, limit (max 50)."
+          }
+        },
+        {
+          "name": "Create doctor",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 201', function () {",
+                  "  pm.response.to.have.status(201);",
+                  "});",
+                  "const body = pm.response.json();",
+                  "if (body.data && body.data.id) {",
+                  "  pm.collectionVariables.set('doctorId', body.data.id);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Cara Heart\",\n  \"specialization\": \"Cardiology\",\n  \"hospital\": \"City General Hospital\",\n  \"phone\": \"01711111111\",\n  \"email\": \"cara.heart@example.com\"\n}"
+            },
+            "url": "{{baseUrl}}/api/v1/doctors",
+            "description": "409 if the email already exists. Saves data.id into doctorId."
+          }
+        },
+        {
+          "name": "Create second doctor",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const body = pm.response.json();",
+                  "if (body.data && body.data.id) {",
+                  "  pm.collectionVariables.set('otherDoctorId', body.data.id);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Nia Nerve\",\n  \"specialization\": \"Neurology\",\n  \"hospital\": \"Lakeside Clinic\",\n  \"phone\": \"01722222222\",\n  \"email\": \"nia.nerve@example.com\"\n}"
+            },
+            "url": "{{baseUrl}}/api/v1/doctors",
+            "description": "Saves data.id into otherDoctorId for the reassign-patient request."
+          }
+        },
+        {
+          "name": "Get doctor",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/v1/doctors/{{doctorId}}"
+          }
+        },
+        {
+          "name": "Update doctor",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"hospital\": \"Riverside Medical Center\"\n}"
+            },
+            "url": "{{baseUrl}}/api/v1/doctors/{{doctorId}}",
+            "description": "Send any subset of name, specialization, hospital, phone, email. An empty body is 422."
+          }
+        },
+        {
+          "name": "Delete doctor",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": "{{baseUrl}}/api/v1/doctors/{{doctorId}}",
+            "description": "409 while any patient still references this doctor."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Doctor patients",
+      "item": [
+        {
+          "name": "List a doctor's patients",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/v1/doctors/{{doctorId}}/patients?page=1&limit=10",
+            "description": "Optional q. Sorted by registeredAt descending."
+          }
+        },
+        {
+          "name": "Add patient under doctor",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 201', function () {",
+                  "  pm.response.to.have.status(201);",
+                  "});",
+                  "const body = pm.response.json();",
+                  "if (body.data && body.data.id) {",
+                  "  pm.collectionVariables.set('patientId', body.data.id);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Pat Example\",\n  \"age\": 42,\n  \"gender\": \"female\",\n  \"phone\": \"01733333333\",\n  \"email\": \"pat@example.com\",\n  \"condition\": \"Hypertension\",\n  \"registeredAt\": \"2026-03-01T00:00:00.000Z\",\n  \"notes\": \"Follow up in four weeks\"\n}"
+            },
+            "url": "{{baseUrl}}/api/v1/doctors/{{doctorId}}/patients",
+            "description": "email, registeredAt, and notes are optional. Increments that doctor's patientCount. Saves data.id into patientId."
+          }
+        },
+        {
+          "name": "Remove patient from doctor",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": "{{baseUrl}}/api/v1/doctors/{{doctorId}}/patients/{{patientId}}",
+            "description": "404 if the patient does not belong to this doctor. Decrements patientCount."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Patients",
+      "item": [
+        {
+          "name": "List patients",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/v1/patients?page=1&limit=10&sort=registeredAt&order=desc",
+            "description": "Optional query: q (phone prefix when the text is digits/spaces/+/(/)/-, otherwise whole-word name and condition search), condition, doctor (id), gender (male | female | other), from, to (registeredAt), sort (name | registeredAt | age | createdAt), order, page, limit (max 50)."
+          }
+        },
+        {
+          "name": "Get patient",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/v1/patients/{{patientId}}"
+          }
+        },
+        {
+          "name": "Update patient",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"condition\": \"Asthma\",\n  \"notes\": \"Inhaler prescribed\"\n}"
+            },
+            "url": "{{baseUrl}}/api/v1/patients/{{patientId}}",
+            "description": "Partial update. Send email as an empty string to clear it."
+          }
+        },
+        {
+          "name": "Reassign patient",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"doctor\": \"{{otherDoctorId}}\"\n}"
+            },
+            "url": "{{baseUrl}}/api/v1/patients/{{patientId}}",
+            "description": "Moves patientCount from the previous doctor to otherDoctorId. Run Create second doctor first."
+          }
+        },
+        {
+          "name": "Delete patient",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": "{{baseUrl}}/api/v1/patients/{{patientId}}",
+            "description": "Decrements the owning doctor's patientCount."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Meta",
+      "item": [
+        {
+          "name": "Filter options",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/v1/meta/filters",
+            "description": "Distinct specializations, hospitals, and conditions. Cached for 60 seconds."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Dashboard",
+      "item": [
+        {
+          "name": "Summary",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/v1/dashboard/summary",
+            "description": "KPIs plus the 5 latest doctors and 5 latest patients. patientsThisMonth uses the current UTC month."
+          }
+        },
+        {
+          "name": "Patients per doctor",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/v1/dashboard/patients-per-doctor?limit=10",
+            "description": "Chart shape { labels, values }. limit default 10, max 50."
+          }
+        },
+        {
+          "name": "Timeseries",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/v1/dashboard/timeseries?range=30d&interval=day",
+            "description": "range: 7d | 30d | 90d | 12m. interval: day | week | month. Defaults: 7d/30d day, 90d week, 12m month. Empty buckets are filled."
+          }
+        },
+        {
+          "name": "Conditions",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/v1/dashboard/conditions?limit=6",
+            "description": "Top conditions plus Other. limit default 6, max 20."
+          }
+        },
+        {
+          "name": "Specializations",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/v1/dashboard/specializations",
+            "description": "Doctors grouped by specialization, capped at 50."
+          }
+        }
+      ]
+    }
+  ]
+}
