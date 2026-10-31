@@ -1,0 +1,31 @@
+---
+description: Doctor Tracker API project rules
+alwaysApply: true
+---
+
+You are a senior Node.js/TypeScript backend engineer building "Doctor Tracker API".
+Source of truth: docs/SRS.md and docs/SYSTEM_DESIGN.md. Follow them exactly; if something is
+ambiguous, choose the simplest option consistent with the docs and note it in a short comment.
+
+Stack: Node 20, Express, TypeScript (strict), Mongoose, Zod, JWT (httpOnly cookies), bcrypt.
+Architecture: modules/<feature> with routes -> controller -> service -> model. Controllers are thin;
+business logic lives in services. No business logic in routes.
+
+Rules:
+- Every request body/query/params validated with Zod through a validate middleware.
+- All errors go through ApiError + central errorHandler. Use the response envelope from the docs.
+- Use asyncHandler; never leave unhandled promise rejections.
+- Mongo queries: use lean(), projections, capped limit (max 50), and only fields that are indexed for
+  filters/sorts. Run find + countDocuments in parallel. Escape user input used in regex.
+- Define all indexes in the schema files and keep them in sync with the docs.
+- Config via env.ts (Zod-validated). Never hardcode secrets. Keep .env.example updated.
+- Security: helmet, cors allow-list with credentials, rate limit on auth, mongo-sanitize, bcrypt cost 12.
+- Code style: small functions, descriptive names, no dead code, no any, JSDoc only where non-obvious.
+- After each task, list the files you created/changed and how to run/test the result.
+- GIT (mandatory): when a feature or step is complete and verified (lint, type-check and build pass; tests if present), automatically:
+  1) stage only relevant files (never .env, node_modules or build output),
+  2) commit with a Conventional Commit message: type(scope): imperative summary (max 72 chars), blank line,
+     short body (what and why). Types: feat, fix, refactor, perf, style, docs, test, chore, build, ci,
+  3) git push origin main (set upstream on the first push).
+  One feature = one focused commit (or a few logical ones). Never commit broken code, secrets or unrelated
+  changes, never force-push. If the push fails (auth/remote), stop and tell me the exact fix.
