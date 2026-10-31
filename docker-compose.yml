@@ -1,0 +1,50 @@
+services:
+  mongo:
+    image: mongo:7
+    command: ['mongod', '--replSet', 'rs0', '--bind_ip_all']
+    ports:
+      - '27017:27017'
+    volumes:
+      - mongo_data:/data/db
+    healthcheck:
+      test: ['CMD', 'mongosh', '--quiet', '--eval', "db.adminCommand('ping').ok"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  mongo-init:
+    image: mongo:7
+    depends_on:
+      mongo:
+        condition: service_healthy
+    restart: 'no'
+    entrypoint:
+      - mongosh
+      - --host
+      - mongo:27017
+      - --eval
+      - |
+        try { rs.status(); } catch (error) { rs.initiate({ _id: 'rs0', members: [{ _id: 0, host: 'mongo:27017' }] }); }
+
+  api:
+    build: .
+    ports:
+      - '4000:4000'
+    environment:
+      NODE_ENV: development
+      PORT: 4000
+      MONGODB_URI: mongodb://mongo:27017/doctor-tracker?replicaSet=rs0
+      CLIENT_ORIGIN: http://localhost:3000
+      JWT_ACCESS_SECRET: dev-access-secret-change-me-32chars
+      JWT_REFRESH_SECRET: dev-refresh-secret-change-me-32chars
+      COOKIE_SECURE: 'false'
+      COOKIE_SAMESITE: lax
+      SEED_ADMIN_NAME: Admin
+      SEED_ADMIN_EMAIL: admin@doctortracker.local
+      SEED_ADMIN_PASSWORD: ChangeMe123!
+    depends_on:
+      mongo-init:
+        condition: service_completed_successfully
+
+volumes:
+  mongo_data:

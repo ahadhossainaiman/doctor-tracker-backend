@@ -72,7 +72,7 @@ export function errorHandler(err: unknown, req: Request, res: Response, _next: N
   }
 
   if (isDuplicateKey(err)) {
-    logError(req, err, 409);
+    logError(req, new Error('Duplicate key'), 409);
     const fields = Object.keys(err.keyPattern ?? {});
     sendError(res, 409, 'CONFLICT', 'A record with this value already exists', { fields });
     return;

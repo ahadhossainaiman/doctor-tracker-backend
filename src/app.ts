@@ -4,6 +4,7 @@ import express from 'express';
 import mongoSanitize from 'express-mongo-sanitize';
 import helmet from 'helmet';
 import { corsOptions } from './config/cors.js';
+import { authenticate, authorize } from './middlewares/authenticate.js';
 import { errorHandler } from './middlewares/errorHandler.js';
 import { notFound } from './middlewares/notFound.js';
 import { requestId } from './middlewares/requestId.js';
@@ -30,11 +31,13 @@ export function createApp(): express.Express {
     sendSuccess(res, { status: 'ok' });
   });
 
+  const requireAdmin = [authenticate, authorize('admin')];
+
   app.use('/api/v1/auth', authRouter);
-  app.use('/api/v1/doctors', doctorRouter);
-  app.use('/api/v1/patients', patientRouter);
-  app.use('/api/v1/dashboard', dashboardRouter);
-  app.use('/api/v1/meta', metaRouter);
+  app.use('/api/v1/doctors', requireAdmin, doctorRouter);
+  app.use('/api/v1/patients', requireAdmin, patientRouter);
+  app.use('/api/v1/dashboard', requireAdmin, dashboardRouter);
+  app.use('/api/v1/meta', requireAdmin, metaRouter);
 
   app.use(notFound);
   app.use(errorHandler);
