@@ -26,6 +26,4 @@ Rules:
   1) stage only relevant files (never .env, node_modules or build output),
   2) commit with a Conventional Commit message: type(scope): imperative summary (max 72 chars), blank line,
      short body (what and why). Types: feat, fix, refactor, perf, style, docs, test, chore, build, ci,
-  3) git push origin main (set upstream on the first push).
-  One feature = one focused commit (or a few logical ones). Never commit broken code, secrets or unrelated
-  changes, never force-push. If the push fails (auth/remote), stop and tell me the exact fix.
+  3) do NOT run git push. I will push manually at the end.

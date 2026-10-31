@@ -173,6 +173,20 @@ describe('doctors and patients', () => {
     );
     assert.ok(listed.body.meta.total >= 1);
 
+    const byPrefix = await agent.get('/api/v1/doctors').query({ q: 'card' });
+    assert.equal(byPrefix.status, 200);
+    assert.ok(
+      byPrefix.body.data.some(
+        (doctor: { id: string }) => doctor.id === cardio.body.data.id,
+      ),
+    );
+
+    const byWord = await agent.get('/api/v1/doctors').query({ q: 'Heart' });
+    assert.equal(byWord.status, 200);
+    assert.ok(
+      byWord.body.data.some((doctor: { id: string }) => doctor.id === cardio.body.data.id),
+    );
+
     const created = await agent.post(`/api/v1/doctors/${cardio.body.data.id}/patients`).send({
       name: 'Pat Example',
       age: 42,
@@ -182,6 +196,14 @@ describe('doctors and patients', () => {
       registeredAt: new Date().toISOString(),
     });
     assert.equal(created.status, 201);
+
+    const patientsByPrefix = await agent.get('/api/v1/patients').query({ q: 'hyp' });
+    assert.equal(patientsByPrefix.status, 200);
+    assert.ok(
+      patientsByPrefix.body.data.some(
+        (patient: { id: string }) => patient.id === created.body.data.id,
+      ),
+    );
 
     const afterCreate = await agent.get(`/api/v1/doctors/${cardio.body.data.id}`);
     assert.equal(afterCreate.body.data.patientCount, 1);

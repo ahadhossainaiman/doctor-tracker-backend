@@ -1,6 +1,6 @@
 import { Types, type ClientSession } from 'mongoose';
 import { createdAtRange } from '../../utils/dateRange.js';
-import { escapeRegex } from '../../utils/escapeRegex.js';
+import { escapeRegex, isSingleToken, tokenMatch } from '../../utils/escapeRegex.js';
 import { ApiError } from '../../utils/ApiError.js';
 import { invalidateReadCaches } from '../../utils/cache.js';
 import { toPaginationMeta, type PaginationMeta } from '../../utils/response.js';
@@ -67,8 +67,9 @@ function toPatientDto(patient: PatientRecord): PatientDto {
 }
 
 /**
- * Name and condition use the text index.
- * A phone-shaped query uses an anchored prefix on the phone index instead.
+ * A phone-shaped query uses an anchored prefix on the phone index.
+ * One other token matches a prefix or a word in name or condition.
+ * Several words use the text index.
  */
 type PatientFilter = {
   doctor?: string;
@@ -77,6 +78,10 @@ type PatientFilter = {
   registeredAt?: { $gte?: Date; $lte?: Date };
   phone?: { $regex: string };
   $text?: { $search: string };
+  $or?: Array<{
+    name?: { $regex: string; $options: 'i' };
+    condition?: { $regex: string; $options: 'i' };
+  }>;
 };
 
 export function buildPatientFilter(
@@ -100,6 +105,9 @@ export function buildPatientFilter(
   if (query.q) {
     if (isPhoneQuery(query.q)) {
       filter.phone = { $regex: `^${escapeRegex(query.q)}` };
+    } else if (isSingleToken(query.q)) {
+      const match = tokenMatch(query.q);
+      filter.$or = [{ name: match }, { condition: match }];
     } else {
       filter.$text = { $search: query.q };
     }

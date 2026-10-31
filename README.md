@@ -1,136 +1,214 @@
 # Doctor Tracker API
 
-## Elevator Pitch
+Secure admin API for managing doctors, their patients, and clinic analytics. The Next.js client talks to this service over REST. Sessions stay in httpOnly cookies.
 
-Doctor Tracker API is the admin backend for a clinic portal. It authenticates a single admin with httpOnly cookies, then lists, filters, and pages doctors and patients without collection scans. Patient totals stay on each doctor so the dashboard can chart load in one indexed read.
+## Description
+
+Doctor Tracker is an administrative portal for a clinic. Authenticated staff register doctors, attach patients to a doctor, and review how the practice is growing. This service is the system of record: it checks every request, pages and filters large lists through MongoDB indexes, and returns dashboard numbers the client can chart. A denormalized patient count on each doctor keeps the “patients per doctor” view to a single indexed read.
 
 ## Setup Guide
 
-Requirements: Node.js 20.19 or newer, and MongoDB 7.
+Requirements:
 
-```bash
-cp .env.example .env
-npm install
-npm run seed
-npm run dev
-```
+- Node.js 20.19 or newer
+- MongoDB 7
+- npm
 
-The API listens on `http://localhost:4000`. Health check: `GET /api/v1/health`.
+1. Install dependencies and create the local environment file.
 
-Seed login (from `.env.example`):
+   ```bash
+   npm install
+   ```
 
-- email: `admin@doctortracker.local`
-- password: `ChangeMe123!`
+   macOS and Linux:
 
-`npm run seed` creates that admin and, when the doctors collection is empty, 200 doctors and 5,000 patients. Run it again and it only refreshes the admin.
+   ```bash
+   cp .env.example .env
+   ```
 
-Useful scripts:
+   Windows PowerShell:
 
-| Script                        | Purpose                                         |
-| ----------------------------- | ----------------------------------------------- |
-| `npm run dev`                 | Restart on change                               |
-| `npm run build` / `npm start` | Compile and run `dist/`                         |
-| `npm run lint`                | ESLint                                          |
-| `npm test`                    | Auth, list filters, patient counts, index plans |
-| `npm run recount`             | Rebuild `patientCount` from patients            |
-| `npm run explain`             | Print the winning index for each list query     |
+   ```powershell
+   Copy-Item .env.example .env
+   ```
 
-Docker (API + a single-node replica set, so patient-count transactions work):
+   `.env.example` is the only environment file in git. Replace the JWT secrets before any shared deployment. `CLIENT_ORIGIN` must be the browser origin of the admin app, default `http://localhost:3000`.
 
-```bash
-docker compose up --build
-```
+2. Load the admin account and sample clinical data.
 
-Inside that network the API uses `MONGODB_URI=mongodb://mongo:27017/doctor-tracker?replicaSet=rs0`. A local standalone MongoDB still runs the app; count updates then run without a transaction, and `npm run recount` is the repair.
+   ```bash
+   npm run seed
+   ```
+
+   The seed upserts the admin on every run. It inserts 200 doctors and 5,000 patients only when the doctors collection is empty. Sample records use a fixed faker seed, so a fresh database is reproducible.
+
+   Development login, from `.env.example`:
+
+   | Field    | Value                         |
+   | -------- | ----------------------------- |
+   | Email    | `admin@doctortracker.local`   |
+   | Password | `ChangeMe123!`                |
+   | Name     | `Admin`                       |
+
+3. Start the API.
+
+   ```bash
+   npm run dev
+   ```
+
+   The process listens on `http://localhost:4000` after MongoDB connects. Confirm it with `GET /api/v1/health`, which returns `{ "success": true, "data": { "status": "ok" } }`.
+
+### Scripts
+
+| Script            | Purpose                                                         |
+| ----------------- | --------------------------------------------------------------- |
+| `npm run dev`     | Run with reload on file changes                                 |
+| `npm run build`   | Compile TypeScript to `dist/`                                   |
+| `npm start`       | Run the compiled server                                         |
+| `npm run lint`    | Lint the project                                                |
+| `npm run typecheck` | Type-check application and tests                              |
+| `npm test`        | Auth, list filters, patient counts, and index plans             |
+| `npm run seed`    | Create the admin and, if needed, sample doctors and patients    |
+| `npm run recount` | Rebuild every `patientCount` from the patients collection       |
+| `npm run explain` | Print the winning index plan for each main list query           |
+
+A Postman collection is in `postman/Doctor-Tracker-API.postman_collection.json`. Import it, enable the cookie jar, and sign in with the seed account. Later requests reuse the session.
+
+### Docker
+
+`docker compose up --build` starts the API and a single-node MongoDB replica set named `rs0`. Inside that network the API uses `MONGODB_URI=mongodb://mongo:27017/doctor-tracker?replicaSet=rs0`, so a patient write and its count update commit in one transaction.
+
+A local standalone MongoDB still runs the application. Count updates then run as sequential writes, and `npm run recount` rebuilds the counters if they drift.
 
 ## System Architecture
 
 ```
-Browser / Next.js rewrite
-        |  httpOnly cookies
+Browser
+  Next.js admin (http://localhost:3000)
+  rewrites /api/* to the API and sends cookies
+        |
         v
-Express /api/v1
-  request id, helmet, CORS allow-list, cookies, JSON, mongo-sanitize
+Express API (http://localhost:4000/api/v1)
+  request id, helmet, CORS allow-list, cookies, JSON limit, mongo-sanitize
   routes -> controllers -> services -> Mongoose models
         |
         v
-MongoDB: users, doctors, patients
+MongoDB
+  users, doctors, patients
 ```
 
-Login checks bcrypt, then sets `accessToken` (15 minutes) and `refreshToken` (7 days). Refresh checks the signed token, its stored hash, and `tokenVersion`. Logout increments `tokenVersion` and clears both cookies. Every route except health, login, and refresh requires an admin access token.
+**Sign in.** `POST /api/v1/auth/login` checks the password with bcrypt (cost 12) and sets two httpOnly cookies: `accessToken` for 15 minutes and `refreshToken` for 7 days. The refresh token is stored as a SHA-256 hash next to a `tokenVersion`. `POST /api/v1/auth/refresh` issues a new access cookie when the token, hash, and version still match. Logout increments `tokenVersion` and clears both cookies. Five failed logins for the same IP and email within 15 minutes return `429`.
 
-Doctor and patient lists validate the query, then run `find` and `countDocuments` together with `lean()` and a field projection. Search uses the text index. A phone-shaped patient search uses an anchored prefix on `{phone:1}`. Dashboard chart routes return `{ labels, values }`. Those reads, and `GET /meta/filters`, sit in a 60-second memory cache that doctor and patient writes clear.
+**Lists.** Query parameters are validated with Zod. The service runs `find` and `countDocuments` together, with `lean()`, a field projection, and a limit capped at 50. A single search token matches the start of a field or a whole word inside it, so `card` finds Cardiology and `Ward` finds a last name. A query of several words uses the text index. A phone-shaped patient search uses an anchored prefix on `{phone:1}`.
 
-`patientCount` changes with `$inc` in the same service call as the patient write. On a replica set that pair is one transaction. On a standalone node the writes are sequential.
+**Patient writes.** Creating, deleting, or reassigning a patient adjusts `doctor.patientCount` with `$inc` in the same service call. On a replica set that pair is one transaction. Deleting a doctor returns `409` while any patient still references that doctor.
+
+**Dashboard.** Summary, charts, and `GET /meta/filters` are cached in process memory for 60 seconds. Doctor and patient writes clear that cache. Chart routes return `{ labels, values }`. The time series fills empty days, weeks, or months so the client can draw a continuous line.
+
+The API is stateless aside from that short cache. Horizontal scale means more API processes behind a load balancer, cursor pagination when `skip` becomes expensive, and Redis when the cache must be shared. Read replicas can serve the dashboard aggregations.
 
 ## Technical Decisions
 
-1. **Denormalized `patientCount` plus compound indexes.** The patients-per-doctor chart and the load sort read `doctor.patientCount` with `{patientCount:-1}`. That stays an index read instead of counting patients or using `$lookup`. The cost is keeping the counter aligned, which `$inc` and `npm run recount` do.
+### 1. Denormalized `patientCount`, with compound indexes
 
-2. **httpOnly cookie JWTs.** The access token stays in a cookie the browser script cannot read. The frontend keeps filters in the URL and server data in TanStack Query, so this API does not accept `Authorization` headers or localStorage tokens.
+The patients-per-doctor chart and the sort by workload read `doctor.patientCount` through `{patientCount:-1}`. That is an index read of a fixed limit. Counting patients at request time, or joining with `$lookup`, would rescan the patients collection on every dashboard load.
+
+The tradeoff is consistency. Each create, delete, and reassignment updates the counter in the same service call, inside a transaction when the deployment is a replica set. `npm run recount` is the repair path: it groups patients by doctor and writes the totals back. The same idea covers the other hot paths. Specialization, hospital, condition, gender, and registration date each have a compound index so filters and the default sorts do not scan the collection.
+
+### 2. httpOnly cookie sessions
+
+Access and refresh tokens are JWTs in httpOnly cookies, with `SameSite=Lax` by default and `Secure` in production. Browser script cannot read them, so a cross-site script cannot exfiltrate the session the way it can with a token in `localStorage`.
+
+The access token carries the user id and role and is checked without a database read. The refresh token is revocable: logout bumps `tokenVersion`, and a stolen refresh cookie fails the hash check after that. The admin app keeps filters in the URL and server data in its own cache. This API does not accept an `Authorization` header.
+
+Role checks are still explicit. Feature routes require an admin access token and return `403` for any other role, even though the seed creates only one admin.
 
 ## Visual Evidence
 
-Screenshots belong to the frontend app. Placeholders:
+The interface is the companion Next.js application. This repository serves the data those screens request. Reviewers should capture the admin app at desktop and mobile widths after signing in with the seed account.
 
-- Desktop: `docs/screenshots/desktop.png`
-- Mobile: `docs/screenshots/mobile.png`
+| View     | What to capture                                                                 |
+| -------- | ------------------------------------------------------------------------------- |
+| Desktop  | Dashboard KPIs and charts, the doctors table with filters, a doctor profile, the patients table |
+| Mobile   | The same four screens at 360px, with bottom navigation and filters in a sheet  |
 
-## API Summary
+Suggested paths when those captures are stored with the client: `docs/screenshots/desktop.png` and `docs/screenshots/mobile.png`.
 
-Prefix: `/api/v1`. Success: `{ success: true, data, meta? }`. Error: `{ success: false, error: { code, message, details? } }`.
+## API
 
-| Method | Path                               | Auth           | Purpose                                                                              |
-| ------ | ---------------------------------- | -------------- | ------------------------------------------------------------------------------------ |
-| GET    | `/health`                          | Public         | Liveness                                                                             |
-| POST   | `/auth/login`                      | Public         | Set session cookies. 5 failures / 15 min per IP + email                              |
-| POST   | `/auth/refresh`                    | Refresh cookie | New access cookie                                                                    |
-| POST   | `/auth/logout`                     | Public         | Revoke refresh token and clear cookies                                               |
-| GET    | `/auth/me`                         | Admin          | Current user                                                                         |
-| GET    | `/doctors`                         | Admin          | `q`, `specialization`, `hospital`, `from`, `to`, `sort`, `order`, `page`, `limit`    |
-| POST   | `/doctors`                         | Admin          | Create. 409 on duplicate email                                                       |
-| GET    | `/doctors/:id`                     | Admin          | Profile                                                                              |
-| PATCH  | `/doctors/:id`                     | Admin          | Partial update                                                                       |
-| DELETE | `/doctors/:id`                     | Admin          | 409 while patients remain                                                            |
-| GET    | `/doctors/:id/patients`            | Admin          | That doctor's patients                                                               |
-| POST   | `/doctors/:id/patients`            | Admin          | Create patient and `$inc` count                                                      |
-| DELETE | `/doctors/:id/patients/:patientId` | Admin          | Delete that patient and `$inc` count                                                 |
+Base URL: `http://localhost:4000/api/v1`.
+
+Success:
+
+```json
+{ "success": true, "data": {}, "meta": { "page": 1, "limit": 10, "total": 0, "totalPages": 0 } }
+```
+
+`meta` is present on paginated lists. Error:
+
+```json
+{ "success": false, "error": { "code": "VALIDATION_ERROR", "message": "…", "details": {} } }
+```
+
+Status codes in use: `400`, `401`, `403`, `404`, `409`, `422`, `429`, `500`. Validation failures are `422`. A duplicate email is `409`.
+
+| Method | Path                               | Auth           | Purpose                                                    |
+| ------ | ---------------------------------- | -------------- | ---------------------------------------------------------- |
+| GET    | `/health`                          | Public         | Liveness                                                   |
+| POST   | `/auth/login`                      | Public         | Set session cookies. Rate limited                          |
+| POST   | `/auth/refresh`                    | Refresh cookie | Issue a new access cookie                                  |
+| POST   | `/auth/logout`                     | Public         | Revoke the refresh token and clear both cookies            |
+| GET    | `/auth/me`                         | Admin          | Current user                                               |
+| GET    | `/doctors`                         | Admin          | `q`, `specialization`, `hospital`, `from`, `to`, `sort`, `order`, `page`, `limit` |
+| POST   | `/doctors`                         | Admin          | Create. Required: name, specialization, hospital, phone, email |
+| GET    | `/doctors/:id`                     | Admin          | Profile                                                    |
+| PATCH  | `/doctors/:id`                     | Admin          | Partial update                                             |
+| DELETE | `/doctors/:id`                     | Admin          | Delete. `409` while patients remain                       |
+| GET    | `/doctors/:id/patients`            | Admin          | That doctor's patients, paginated, with search             |
+| POST   | `/doctors/:id/patients`            | Admin          | Add a patient and increment `patientCount`                 |
+| DELETE | `/doctors/:id/patients/:patientId` | Admin          | Remove that patient and decrement `patientCount`           |
 | GET    | `/patients`                        | Admin          | `q`, `condition`, `doctor`, `gender`, `from`, `to`, `sort`, `order`, `page`, `limit` |
-| GET    | `/patients/:id`                    | Admin          | Profile                                                                              |
-| PATCH  | `/patients/:id`                    | Admin          | Edit, including doctor reassignment                                                  |
-| DELETE | `/patients/:id`                    | Admin          | Delete and `$inc` count                                                              |
-| GET    | `/meta/filters`                    | Admin          | Distinct specializations, hospitals, conditions                                      |
-| GET    | `/dashboard/summary`               | Admin          | KPIs plus 5 latest doctors and patients                                              |
-| GET    | `/dashboard/patients-per-doctor`   | Admin          | `{ labels, values }` from `patientCount`                                             |
-| GET    | `/dashboard/timeseries`            | Admin          | `range=7d\|30d\|90d\|12m`, optional `interval=day\|week\|month`                      |
-| GET    | `/dashboard/conditions`            | Admin          | Top N plus `Other`                                                                   |
-| GET    | `/dashboard/specializations`       | Admin          | Doctors grouped by specialization                                                    |
+| GET    | `/patients/:id`                    | Admin          | Profile, including the doctor name                         |
+| PATCH  | `/patients/:id`                    | Admin          | Edit. A new `doctor` moves the patient and both counts     |
+| DELETE | `/patients/:id`                    | Admin          | Delete and decrement `patientCount`                        |
+| GET    | `/meta/filters`                    | Admin          | Distinct specializations, hospitals, and conditions        |
+| GET    | `/dashboard/summary`               | Admin          | Four KPIs plus the five latest doctors and patients        |
+| GET    | `/dashboard/patients-per-doctor`   | Admin          | Top doctors by `patientCount`. Query: `limit` (default 10) |
+| GET    | `/dashboard/timeseries`            | Admin          | Registrations over time. `range=7d\|30d\|90d\|12m`, optional `interval=day\|week\|month` |
+| GET    | `/dashboard/conditions`            | Admin          | Patients by condition. Top `limit` (default 6) plus `Other` |
+| GET    | `/dashboard/specializations`       | Admin          | Doctors grouped by specialization                          |
 
-List defaults are page 1 and limit 10. Limit cannot exceed 50. Dates are UTC; `from` / `to` as `YYYY-MM-DD` include that whole day. Doctor `from`/`to` filter `createdAt`. Patient `from`/`to` filter `registeredAt`.
+List defaults are page 1 and limit 10. Limit cannot exceed 50. Dates are UTC. `from` and `to` use `YYYY-MM-DD` and include that whole day. On doctors they filter `createdAt`. On patients they filter `registeredAt`.
 
-### Indexes each list uses
+Doctor sort fields: `name`, `createdAt` (default), `patientCount`. Patient sort fields: `name`, `registeredAt` (default), `age`, `createdAt`. Order is `asc` or `desc`.
 
-| Query                                   | Index                                              |
-| --------------------------------------- | -------------------------------------------------- |
-| Doctors, default or `sort=createdAt`    | `{createdAt:-1}`                                   |
-| Doctors `specialization` + `createdAt`  | `{specialization:1, createdAt:-1}`                 |
-| Doctors `hospital` + `createdAt`        | `{hospital:1, createdAt:-1}`                       |
-| Doctors `sort=patientCount`             | `{patientCount:-1}`                                |
-| Doctors `sort=name`                     | `{name:1}` (added so name sort is not a scan)      |
-| Doctors `q`                             | text `{name, specialization, hospital}`            |
-| Patients for one doctor, `registeredAt` | `{doctor:1, registeredAt:-1}`                      |
-| Patients `condition` + `registeredAt`   | `{condition:1, registeredAt:-1}`                   |
-| Patients date range                     | `{registeredAt:-1}`                                |
-| Patients `gender` + `registeredAt`      | `{gender:1, registeredAt:-1}` (added for PAT-4)    |
-| Patients phone-shaped `q`               | `{phone:1}` anchored prefix (added for PAT-3)      |
-| Patients name/condition `q`             | text `{name, condition}`                           |
-| Patients `sort=name`                    | `{name:1}`                                         |
-| Patients per doctor chart               | `{patientCount:-1}`                                |
-| Timeseries                              | `$match` on `{registeredAt:-1}`, then `$dateTrunc` |
-| Condition donut                         | `$match` `{condition:{$gte:''}}` on `{condition:1, registeredAt:-1}`, then `$group` |
-| Specialization chart                    | `$match` `{specialization:{$gte:''}}` on `{specialization:1, createdAt:-1}`, then `$group` |
+Summary fields: `totalDoctors`, `totalPatients`, `patientsThisMonth`, `averagePatientsPerDoctor`, `recentDoctors`, `recentPatients`. Sparklines and period deltas are derived by the client from the time series.
 
-`npm run explain` prints the winning plan against the database you have seeded. `npm test` fails a plan that is a `COLLSCAN`.
+### Indexes
+
+| Query                                      | Index                                                                 |
+| ------------------------------------------ | --------------------------------------------------------------------- |
+| Doctors, default or `sort=createdAt`       | `{createdAt:-1}`                                                      |
+| Doctors filtered by specialization         | `{specialization:1, createdAt:-1}`                                    |
+| Doctors filtered by hospital               | `{hospital:1, createdAt:-1}`                                          |
+| Doctors `sort=patientCount`                | `{patientCount:-1}`                                                   |
+| Doctors `sort=name`                        | `{name:1}`                                                            |
+| Doctors `q`, one token                     | Prefix or word match on name, specialization, and hospital            |
+| Doctors `q`, several words                 | Text index `{name, specialization, hospital}`                         |
+| One doctor's patients                      | `{doctor:1, registeredAt:-1}`                                         |
+| Patients filtered by condition             | `{condition:1, registeredAt:-1}`                                      |
+| Patients filtered by registration date     | `{registeredAt:-1}`                                                   |
+| Patients filtered by gender                | `{gender:1, registeredAt:-1}`                                         |
+| Patients phone search                      | `{phone:1}`, anchored prefix                                          |
+| Patients `q`, one token                    | Prefix or word match on name and condition                            |
+| Patients `q`, several words                | Text index `{name, condition}`                                        |
+| Patients `sort=name`                       | `{name:1}`                                                            |
+| Patients per doctor                        | `{patientCount:-1}`                                                   |
+| Time series                                | `$match` on `{registeredAt:-1}`, then `$dateTrunc`                    |
+| Conditions                                 | `$match` `{condition:{$gte:''}}` on `{condition:1, registeredAt:-1}`  |
+| Specializations                            | `$match` `{specialization:{$gte:''}}` on `{specialization:1, createdAt:-1}` |
+
+`npm run explain` prints the winning plan for the seeded database. `npm test` fails if a covered list or aggregation plan is a collection scan.
 
 ### Dashboard pipelines
 
@@ -142,7 +220,7 @@ Doctor.find({ patientCount: { $gt: 0 } })
   .limit(limit);
 ```
 
-Timeseries (`range` chooses the window; `7d`/`30d` default to day, `90d` to week, `12m` to month):
+Time series. `7d` and `30d` group by day, `90d` by week (Monday start), and `12m` by month. `interval` overrides that default.
 
 ```js
 [
@@ -154,22 +232,20 @@ Timeseries (`range` chooses the window; `7d`/`30d` default to day, `90d` to week
     },
   },
   { $sort: { _id: 1 } },
-];
+]
 ```
 
-Missing buckets are filled in the service so the chart has no gaps.
+Empty buckets are filled in the service.
 
-Conditions:
+Conditions. The handler keeps `limit` rows and sums the remainder as `Other`.
 
 ```js
 [
   { $match: { condition: { $gte: '' } } },
   { $group: { _id: '$condition', count: { $sum: 1 } } },
   { $sort: { count: -1, _id: 1 } },
-];
+]
 ```
-
-The handler keeps `limit` rows and sums the rest as `Other`.
 
 Specializations:
 
@@ -179,26 +255,26 @@ Specializations:
   { $group: { _id: '$specialization', count: { $sum: 1 } } },
   { $sort: { count: -1, _id: 1 } },
   { $limit: 50 },
-];
+]
 ```
 
 ## Environment
 
-| Variable              | Required  | Purpose                                                            |
-| --------------------- | --------- | ------------------------------------------------------------------ |
-| `NODE_ENV`            | No        | `development`, `test`, or `production`. Default `development`      |
-| `PORT`                | No        | HTTP port. Default `4000`                                          |
-| `MONGODB_URI`         | Yes       | `mongodb://` or `mongodb+srv://`                                   |
-| `CLIENT_ORIGIN`       | Yes       | Comma-separated browser origins for CORS credentials               |
-| `JWT_ACCESS_SECRET`   | Yes       | Access token secret, at least 32 characters                        |
-| `JWT_REFRESH_SECRET`  | Yes       | Refresh token secret, at least 32 characters                       |
-| `COOKIE_HTTPONLY`     | No        | Default `true`                                                     |
-| `COOKIE_SECURE`       | No        | Default `true` in production. Required when `COOKIE_SAMESITE=none` |
-| `COOKIE_SAMESITE`     | No        | `lax`, `strict`, or `none`. Default `lax`                          |
-| `SEED_ADMIN_NAME`     | Seed only | Default `Admin`                                                    |
-| `SEED_ADMIN_EMAIL`    | Seed only | Admin email                                                        |
-| `SEED_ADMIN_PASSWORD` | Seed only | At least 8 characters                                              |
+| Variable              | Required  | Purpose                                                                 |
+| --------------------- | --------- | ----------------------------------------------------------------------- |
+| `NODE_ENV`            | No        | `development`, `test`, or `production`. Default `development`           |
+| `PORT`                | No        | HTTP port. Default `4000`                                               |
+| `MONGODB_URI`         | Yes       | `mongodb://` or `mongodb+srv://`                                        |
+| `CLIENT_ORIGIN`       | Yes       | Comma-separated browser origins allowed to send credentials             |
+| `JWT_ACCESS_SECRET`   | Yes       | Access-token secret, at least 32 characters                             |
+| `JWT_REFRESH_SECRET`  | Yes       | Refresh-token secret, at least 32 characters                            |
+| `COOKIE_HTTPONLY`     | No        | Default `true`                                                          |
+| `COOKIE_SECURE`       | No        | Default `true` in production. Required when `COOKIE_SAMESITE` is `none` |
+| `COOKIE_SAMESITE`     | No        | `lax`, `strict`, or `none`. Default `lax`                               |
+| `SEED_ADMIN_NAME`     | Seed only | Default `Admin`                                                         |
+| `SEED_ADMIN_EMAIL`    | Seed only | Admin email                                                             |
+| `SEED_ADMIN_PASSWORD` | Seed only | At least 8 characters                                                   |
 
-## Not in this repo
+## Scope
 
-The Next.js admin UI owns login redirects, debounce, confirm dialogs, charts, responsive layout, Lighthouse, and screenshots (UX-1..5, NFR-6, and the UI half of AUTH-5, DOC-3, DOC-6, DOC-8, PAT-6, DASH-1..6). KPI sparklines and period deltas are derived on the client from `/dashboard/timeseries`. This API returns the four KPI numbers.
+This repository is the Express API. The Next.js admin application owns the login screen, navigation, tables, charts, confirmations, and responsive layout. It should proxy `/api/*` to this service and send `credentials: 'include'`. On `401` it calls `POST /api/v1/auth/refresh` once and retries. A failed refresh returns the user to the login page.

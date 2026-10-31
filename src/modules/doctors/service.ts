@@ -1,4 +1,5 @@
 import { createdAtRange } from '../../utils/dateRange.js';
+import { isSingleToken, tokenMatch } from '../../utils/escapeRegex.js';
 import { ApiError } from '../../utils/ApiError.js';
 import { invalidateReadCaches } from '../../utils/cache.js';
 import { toPaginationMeta, type PaginationMeta } from '../../utils/response.js';
@@ -42,9 +43,17 @@ type DoctorFilter = {
   hospital?: string;
   createdAt?: { $gte?: Date; $lte?: Date };
   $text?: { $search: string };
+  $or?: Array<{
+    name?: { $regex: string; $options: 'i' };
+    specialization?: { $regex: string; $options: 'i' };
+    hospital?: { $regex: string; $options: 'i' };
+  }>;
 };
 
-/** Word search uses the text index on name, specialization, and hospital. */
+/**
+ * A single token matches a prefix or a word in name, specialization, or hospital
+ * (`card` matches Cardiology, `Ward` matches a last name). Several words use the text index.
+ */
 export function buildDoctorFilter(query: DoctorListQuery): DoctorFilter {
   const filter: DoctorFilter = {};
   if (query.specialization) {
@@ -58,7 +67,12 @@ export function buildDoctorFilter(query: DoctorListQuery): DoctorFilter {
     filter.createdAt = createdAt;
   }
   if (query.q) {
-    filter.$text = { $search: query.q };
+    if (isSingleToken(query.q)) {
+      const match = tokenMatch(query.q);
+      filter.$or = [{ name: match }, { specialization: match }, { hospital: match }];
+    } else {
+      filter.$text = { $search: query.q };
+    }
   }
   return filter;
 }
